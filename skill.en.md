@@ -3,9 +3,9 @@ title: "MSIX Sandbox & File System Debugging"
 description: "Systematic methodology for debugging MSIX-packaged apps with file system virtualization issues (Cowork VM, sandbox environments, path redirection)."
 ---
 
-# MSIX Sandbox & File System Debugging
+# Claude Desktop Cowork Fix: Debugging Methodology
 
-A systematic methodology for debugging **MSIX-packaged applications** where file system virtualization causes "file not found" errors, sandbox startup failures, or path resolution issues.
+> This document describes the methodology and techniques used to fix the Cowork workspace startup failure. Useful if you hit similar MSIX virtualization issues with other apps.
 
 ## Target Audience
 

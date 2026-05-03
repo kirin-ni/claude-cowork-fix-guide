@@ -1,8 +1,9 @@
-# Case Study: Claude Desktop Cowork VM / 案例：Claude Desktop Cowork VM
+# Claude Desktop Cowork 工作空间修复：完整案例 / Case Study
 
+> 从"工作空间正在启动"到正常运行的完整调试记录。
+
+[ZH] Claude Desktop Cowork 工作的 MSIX 文件系统虚拟化调试——从症状到根因到修复的完整记录。
 [EN] Debugging MSIX file system virtualization in Claude Desktop's Cowork feature — a full walkthrough from symptom to root cause to fix.
-
-[ZH] Claude Desktop Cowork 功能的 MSIX 文件系统虚拟化调试——从症状到根因到修复的完整记录。
 
 ---
 

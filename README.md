@@ -1,62 +1,117 @@
-# MSIX Sandbox & File System Debugging Methodology
+# Claude Desktop Cowork 工作空间启动失败修复指南
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> A systematic methodology for debugging **MSIX-packaged applications** where file system virtualization causes "file not found" errors, sandbox startup failures, or path resolution issues.
->
-> 一套用于调试 **MSIX 打包应用**文件系统虚拟化问题的系统方法论，解决因路径重定向导致的"文件找不到"、沙箱启动失败等问题。
+> Claude Desktop 的 Cowork 功能一直提示"工作空间正在启动"然后卡住不动？这个仓库记录了完整的排查和修复过程。
 
 ---
 
-## The Problem 问题
+## 问题现象
 
-MSIX-packaged apps (Windows Store, sideloaded) have a **redirected filesystem** — `%APPDATA%` and `%LOCALAPPDATA%` are transparently mapped to `Packages\{identity}\LocalCache\`. Native code within the app (C++, Rust, Swift) sees the **redirected path**, not the logical path. This causes baffling "file not found" errors even when the file clearly exists.
+Claude Desktop（Windows Store 版）开 Cowork 工作空间时，显示：
 
-MSIX 打包应用的文件系统是**重定向的**——`%APPDATA%` 和 `%LOCALAPPDATA%` 被透明映射到 `Packages\{identity}\LocalCache\`。应用内的原生代码（C++/Rust/Swift）看到的是**重定向后的路径**，而非逻辑路径。这导致文件明明存在，应用却报"找不到文件"。
+> Workspace still starting. The isolated Linux environment is booting in the background (usually 10–30 seconds). Try again shortly.
 
-Traditional fixes like directory junctions (`mklink /J`) **don't work** inside MSIX containers because the MSIX filter driver does not traverse reparse points. The correct answer is often **NTFS hardlinks** (`mklink /H`).
+等了多久都没用，工作空间永远启动不了。
 
-传统的目录交接点（junction）修复**在 MSIX 容器内无效**，因为 MSIX 过滤器驱动不跟随重解析点。正确的答案往往是 **NTFS 硬链接**。
+## 根本原因
+
+Claude Desktop 是 **MSIX 打包应用**（从 Windows Store 安装的），它的文件系统是重定向的：
+
+| 你以为的文件路径 | MSIX 实际看到的路径 |
+|---|---|
+| `AppData\Local\Claude-3p\...` | `Packages\Claude_...\LocalCache\Roaming\Claude-3p\...` |
+
+Cowork 的 VM 启动时，原生代码（Swift）在这条**重定向后的路径**找 rootfs.vhdx、vmlinuz 这些文件。如果文件不在那里，它就报"找不到文件"。
+
+传统的目录交接点（`mklink /J`）在这里**无效**——MSIX 容器不跟随重解析点。
+
+**解法：NTFS 硬链接（`mklink /H`）。** 文件系统层面的映射，MSIX 容器能直接识别。
 
 ---
 
-## Contents 内容
+## 快速修复（照着做就行）
 
-| File | Description |
-|------|-------------|
-| [`skill.en.md`](skill.en.md) | Full methodology (English) |
-| [`skill.zh.md`](skill.zh.md) | 完整方法论（中文） |
-| [`cases/claude-cowork-vm.md`](cases/claude-cowork-vm.md) | Real case: Claude Desktop Cowork VM (双语) |
-| [`scripts/create-hardlinks.ps1`](scripts/create-hardlinks.ps1) | Utility: batch hardlink creation |
+### 准备工作
 
-## Quick Start 快速开始
+- 保持 Claude Desktop **开着**（不要关）
+- 以**普通权限**打开 PowerShell 或 cmd 就行（不需要管理员）
+
+### 修复步骤
+
+**第一步：找到你的 Claude 包路径**
+
+每个人的包 ID 可能不同，先执行这条命令找到它：
 
 ```powershell
-# 1. Identify the error from logs 从日志定位错误
-Select-String -Path "cowork_vm_node.log" -Pattern "error" | Select -First 10
-
-# 2. Check if it's an MSIX redirect path 检查是否为 MSIX 重定向路径
-#    (contains "Packages\...\LocalCache\")
-
-# 3. Verify constraint matrix 验证约束矩阵
-#    - Admin? 管理员权限？
-#    - Can kill process? 可杀进程？
-#    - File locked? 文件锁定？
-
-# 4. Apply fix: hardlinks instead of junction 应用修复：硬链接替代交接点
-fsutil reparsepoint delete "C:\Users\...\Packages\...\Claude-3p"
-mklink /H <packages_path>\file.vhdx <appdata_path>\file.vhdx
+powershell -Command "Get-ChildItem 'C:\Users\fanch\AppData\Local\Packages\' -Directory -Filter 'Claude*' | Select-Object Name"
 ```
 
-## Core Principle 核心原则
+记下显示的包名（类似 `Claude_pzs8sxrjxfjjc`）。
 
-> **Don't ask "What could work?" — Ask "What can't be eliminated?"**
->
-> **不要问"什么方案能用"——而是问"什么方案不能被排除"。**
+**第二步：删除失效的目录交接点（如果有的话）**
 
-List all candidate solutions. Eliminate those that violate your constraints. The only remaining solution is the answer — even if it seems unintuitive.
+```powershell
+fsutil reparsepoint delete "C:\Users\fanch\AppData\Local\Packages\你的包名\LocalCache\Roaming\Claude-3p"
+```
 
-列出所有候选方案，用约束逐条排除。唯一留下的就是答案——即使它看起来不直观。
+**第三步：创建硬链接**
+
+把下面命令里的 `你的包名` 替换成第一步看到的：
+
+```powershell
+# rootfs.vhdx 是最大的文件（9.45GB），硬链接是瞬间完成的
+mklink /H "C:\Users\fanch\AppData\Local\Packages\你的包名\LocalCache\Roaming\Claude-3p\vm_bundles\claudevm.bundle\rootfs.vhdx" "C:\Users\fanch\AppData\Local\Claude-3p\vm_bundles\claudevm.bundle\rootfs.vhdx"
+
+mklink /H "C:\Users\fanch\AppData\Local\Packages\你的包名\LocalCache\Roaming\Claude-3p\vm_bundles\claudevm.bundle\vmlinuz" "C:\Users\fanch\AppData\Local\Claude-3p\vm_bundles\claudevm.bundle\vmlinuz"
+
+mklink /H "C:\Users\fanch\AppData\Local\Packages\你的包名\LocalCache\Roaming\Claude-3p\vm_bundles\claudevm.bundle\initrd" "C:\Users\fanch\AppData\Local\Claude-3p\vm_bundles\claudevm.bundle\initrd"
+
+mklink /H "C:\Users\fanch\AppData\Local\Packages\你的包名\LocalCache\Roaming\Claude-3p\vm_bundles\claudevm.bundle\smol-bin.vhdx" "C:\Users\fanch\AppData\Local\Claude-3p\vm_bundles\claudevm.bundle\smol-bin.vhdx"
+
+mklink /H "C:\Users\fanch\AppData\Local\Packages\你的包名\LocalCache\Roaming\Claude-3p\vm_bundles\claudevm.bundle\vmlinuz.zst" "C:\Users\fanch\AppData\Local\Claude-3p\vm_bundles\claudevm.bundle\vmlinuz.zst"
+
+mklink /H "C:\Users\fanch\AppData\Local\Packages\你的包名\LocalCache\Roaming\Claude-3p\vm_bundles\claudevm.bundle\initrd.zst" "C:\Users\fanch\AppData\Local\Claude-3p\vm_bundles\claudevm.bundle\initrd.zst"
+
+mklink /H "C:\Users\fanch\AppData\Local\Packages\你的包名\LocalCache\Roaming\Claude-3p\vm_bundles\claudevm.bundle\rootfs.vhdx.zst" "C:\Users\fanch\AppData\Local\Claude-3p\vm_bundles\claudevm.bundle\rootfs.vhdx.zst"
+```
+
+**第四步：验证**
+
+回到 Claude Desktop，点 Cowork 新建一个工作空间。应该就能正常启动了。
+
+### 一键修复脚本
+
+也可以用仓库里带参数的 PowerShell 脚本自动完成，用法：
+
+```powershell
+.\scripts\create-hardlinks.ps1 -SourcePath "C:\Users\fanch\AppData\Local\Claude-3p\vm_bundles\claudevm.bundle" -DestPath "C:\Users\fanch\AppData\Local\Packages\你的包名\LocalCache\Roaming\Claude-3p\vm_bundles\claudevm.bundle"
+```
+
+---
+
+## 仓库内容
+
+| 文件 | 说明 |
+|------|------|
+| [`skill.zh.md`](skill.zh.md) | 完整方法论（中文） |
+| [`skill.en.md`](skill.en.md) | Full methodology (English) |
+| [`cases/claude-cowork-vm.md`](cases/claude-cowork-vm.md) | 完整案例复盘（中英双语） |
+| [`scripts/create-hardlinks.ps1`](scripts/create-hardlinks.ps1) | 一键硬链接脚本 |
+
+包含的内容：
+- **排查方法论**：约束矩阵、决策树、方案速查表
+- **反死循环框架**：5 条规则，防止 debug 绕弯路
+- **MSIX 虚拟化速查**：路径重定向规则、硬链接 vs junction 区别
+- **调试工具箱**：查文件锁、查重解析点、卷影复制等命令
+
+---
+
+## 适用场景
+
+如果你用的是 **Windows Store 版的 Claude Desktop**，Cowork 工作空间无法启动，那这个仓库大概率能帮你解决。
+
+如果你用的是其他 MSIX 打包的应用也遇到类似问题，这里的方法论同样适用。
 
 ## License
 
